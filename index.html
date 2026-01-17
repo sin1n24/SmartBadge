@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XIAO Bluefruit Broadcast Receiver</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; text-align: center; padding: 20px; background-color: #f4f4f9; }
+        h2 { color: #333; }
+        #status { margin-bottom: 20px; color: #666; font-size: 0.9em; }
+        
+        .card {
+            background: white; max-width: 400px; margin: 0 auto; padding: 20px;
+            border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .data-row {
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid #eee; padding: 12px 0; font-size: 1.2em;
+        }
+        .data-row:last-child { border-bottom: none; }
+        .label { font-weight: bold; color: #555; }
+        .value { font-family: monospace; font-size: 1.4em; color: #007bff; }
+        
+        button {
+            background-color: #007bff; color: white; border: none; padding: 12px 24px;
+            font-size: 1em; border-radius: 8px; cursor: pointer; transition: background 0.3s;
+            margin-top: 20px;
+        }
+        button:hover { background-color: #0056b3; }
+        
+        .meta { font-size: 0.8em; color: #999; margin-top: 15px; display: flex; justify-content: space-around; }
+    </style>
+</head>
+<body>
+
+    <h2>XIAO ジャイロ受信機 (Broadcast)</h2>
+    <div id="status">「スキャン開始」を押してデバイスを選択してください</div>
+
+    <div class="card">
+        <div class="data-row">
+            <span class="label">Gyro X</span>
+            <span class="value" id="gx">0.00</span>
+        </div>
+        <div class="data-row">
+            <span class="label">Gyro Y</span>
+            <span class="value" id="gy">0.00</span>
+        </div>
+        <div class="data-row">
+            <span class="label">Gyro Z</span>
+            <span class="value" id="gz">0.00</span>
+        </div>
+        
+        <div class="meta">
+            <span>RSSI: <span id="rssi">--</span> dBm</span>
+            <span>Update: <span id="cnt">0</span></span>
+        </div>
+    </div>
+
+    <button id="btnScan">スキャン開始</button>
+
+    <script>
+        const btnScan = document.getElementById('btnScan');
+        const statusDiv = document.getElementById('status');
+        let updateCount = 0;
+
+        // C++側で設定したCompany ID (テスト用 0xFFFF)
+        const COMPANY_ID = 0xFFFF;
+
+        btnScan.addEventListener('click', async () => {
+            try {
+                // 1. デバイスをスキャン
+                const device = await navigator.bluetooth.requestDevice({
+                    // 名前が "XIAO" で始まるデバイスを探す
+                    filters: [{ namePrefix: "XIAO" }],
+                    // 重要: Manufacturer Data (0xFFFF) へのアクセスを許可する
+                    optionalManufacturerData: [COMPANY_ID]
+                });
+
+                statusDiv.textContent = "接続中... (デバイス名: " + device.name + ")";
+
+                // 2. アドバタイズパケットの監視を開始 (接続はしない)
+                // 注意: chrome://flags で Experimental Web Platform features が有効である必要があります
+                await device.watchAdvertisements();
+
+                statusDiv.textContent = "受信中: " + device.name;
+
+                // 3. パケット受信時のイベントハンドラ
+                device.addEventListener('advertisementreceived', (event) => {
+                    // Manufacturer Dataを取得
+                    const manufacturerData = event.manufacturerData;
+                    
+                    if (manufacturerData.has(COMPANY_ID)) {
+                        const dataView = manufacturerData.get(COMPANY_ID);
+                        
+                        // データ長チェック (int16 * 3 = 6バイト必要)
+                        // ブラウザによってはCompanyID分が除外されるため、純粋なデータ部のみが来る
+                        if (dataView.byteLength >= 6) {
+                            // リトルエンディアンで読み取り、100で割って元の小数に戻す
+                            const x = dataView.getInt16(0, true) / 100.0;
+                            const y = dataView.getInt16(2, true) / 100.0;
+                            const z = dataView.getInt16(4, true) / 100.0;
+
+                            // 画面更新
+                            document.getElementById('gx').textContent = x.toFixed(2);
+                            document.getElementById('gy').textContent = y.toFixed(2);
+                            document.getElementById('gz').textContent = z.toFixed(2);
+                            
+                            // RSSI (信号強度) と更新回数
+                            document.getElementById('rssi').textContent = event.rssi;
+                            document.getElementById('cnt').textContent = ++updateCount;
+                        }
+                    }
+                });
+
+            } catch (error) {
+                console.error(error);
+                statusDiv.textContent = "エラー: " + error;
+            }
+        });
+    </script>
+</body>
+</html>
