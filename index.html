@@ -2,68 +2,76 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>XIAO Beacon Test</title>
+    <title>XIAO Data Receiver</title>
+    <style>
+        body { font-family: monospace; text-align: center; padding: 20px; font-size: 1.2em; }
+        .val { color: blue; font-weight: bold; }
+        button { padding: 10px 20px; font-size: 1em; }
+    </style>
 </head>
 <body>
-    <h2>XIAO ビーコン受信テスト</h2>
-    <p>XIAOが発信しているビーコン信号を表示します。</p>
+    <h2>XIAO データ受信 (0xFFFF)</h2>
     <button id="btnScan">スキャン開始</button>
-    <div id="status">待機中...</div>
+    <div id="status" style="margin: 15px; color: #666;">待機中...</div>
     <hr>
-    <div id="output" style="font-family: monospace; font-size: 1.2em;">
-        <div>デバイス名: <span id="devName">--</span></div>
-        <div>RSSI (強度): <span id="rssi" style="color:red;">--</span> dBm</div>
-        <div>Company ID: <span id="compId">--</span></div>
-        <div>データ(Hex): <span id="hexData" style="color:blue;">--</span></div>
+    <div>
+        RSSI: <span id="rssi">--</span> dBm <br>
+        Count: <span id="cnt">0</span>
+    </div>
+    <div style="margin-top: 20px; text-align: left; display: inline-block;">
+        Gyro X: <span id="gx" class="val">0.00</span> <br>
+        Gyro Y: <span id="gy" class="val">0.00</span> <br>
+        Gyro Z: <span id="gz" class="val">0.00</span>
     </div>
 
     <script>
         const btnScan = document.getElementById('btnScan');
-        const status = document.getElementById('status');
+        const TEST_ID = 0xFFFF; // 今回使用するID
 
         btnScan.addEventListener('click', async () => {
             try {
-                status.textContent = "デバイスを選択してください...";
+                document.getElementById('status').textContent = "デバイスを選択してください...";
 
-                // 1. デバイスを検索
-                // namePrefix: "XIAO" で始まるデバイスを探します
-                // optionalManufacturerData: 0x004C (Apple/iBeacon) と 0xFFFF (テスト用) の閲覧を許可
+                // 1. 0xFFFF のデータを持つデバイスを探す
                 const device = await navigator.bluetooth.requestDevice({
                     filters: [{ namePrefix: "XIAO" }],
-                    optionalManufacturerData: [0x004C, 0xFFFF]
+                    optionalManufacturerData: [TEST_ID]
                 });
 
-                status.textContent = "ビーコン受信中: " + device.name;
-                document.getElementById('devName').textContent = device.name;
-
-                // 2. アドバタイズパケット（ビーコン信号）の監視を開始
+                document.getElementById('status').textContent = "受信中: " + device.name;
+                
+                // 2. 監視開始
                 await device.watchAdvertisements();
 
-                // 3. 信号を受信するたびに実行される処理
+                // 3. データ受信イベント
                 device.addEventListener('advertisementreceived', (event) => {
-                    // RSSI（電波強度）の更新
                     document.getElementById('rssi').textContent = event.rssi;
+                    document.getElementById('cnt').textContent = parseInt(document.getElementById('cnt').textContent) + 1;
 
-                    // Manufacturer Data (企業IDとデータ) の取得
-                    const manufacturerData = event.manufacturerData;
+                    // Manufacturer Data (0xFFFF) を取得
+                    // ブラウザは自動的にCompany ID (最初の2バイト) をキーとして解釈します
+                    const data = event.manufacturerData.get(TEST_ID);
                     
-                    // データの中身を表示
-                    manufacturerData.forEach((value, key) => {
-                        // Company ID (例: 0x004c)
-                        document.getElementById('compId').textContent = "0x" + key.toString(16).toUpperCase().padStart(4, '0');
-                        
-                        // データ部 (Byte配列) を16進数文字列に変換
-                        let hexString = "";
-                        for (let i = 0; i < value.byteLength; i++) {
-                            hexString += value.getUint8(i).toString(16).toUpperCase().padStart(2, '0') + " ";
+                    if (data) {
+                        // データ長さチェック (今回は3軸 x 2byte = 6byte)
+                        // ※ C++側では8byte送りましたが、CompanyID(2byte)はキーになるため、
+                        //    ここ(value)には残りの6byteが入ってきます。
+                        if (data.byteLength >= 6) {
+                            // リトルエンディアンで読み取り、100で割る
+                            const x = data.getInt16(0, true) / 100.0;
+                            const y = data.getInt16(2, true) / 100.0;
+                            const z = data.getInt16(4, true) / 100.0;
+
+                            document.getElementById('gx').textContent = x.toFixed(2);
+                            document.getElementById('gy').textContent = y.toFixed(2);
+                            document.getElementById('gz').textContent = z.toFixed(2);
                         }
-                        document.getElementById('hexData').textContent = hexString;
-                    });
+                    }
                 });
 
             } catch (error) {
                 console.error(error);
-                status.textContent = "エラー: " + error;
+                document.getElementById('status').textContent = "エラー: " + error;
             }
         });
     </script>
