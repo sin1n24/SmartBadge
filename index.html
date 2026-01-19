@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>XIAO Gyro Monitor</title>
+    <title>XIAO Gyro Monitor (Debug)</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #f5f5f5; }
@@ -16,12 +16,17 @@
         button:disabled { background: #ddd; cursor: not-allowed; }
         #timer { font-size: 1.5em; font-weight: bold; color: #333; margin: 10px 0; }
         .values { display: flex; justify-content: space-around; margin-bottom: 10px; font-family: monospace; font-size: 1.2em; }
+        /* デバッグ用コンソール表示エリア */
+        #debug-log { 
+            text-align: left; font-family: monospace; font-size: 0.8em; color: #555; 
+            background: #eee; padding: 10px; margin-top: 20px; height: 100px; overflow-y: scroll; border: 1px solid #ccc;
+        }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>XIAO ジャイロ グラフ & LED操作</h2>
+    <h2>XIAO ジャイロ グラフ (検証モード)</h2>
     
     <div id="timer">00:00:00</div>
     
@@ -40,6 +45,9 @@
     </div>
 
     <canvas id="gyroChart"></canvas>
+    
+    <!-- 画面上でもログが見えるように追加 -->
+    <div id="debug-log">待機中...</div>
 </div>
 
 <script>
@@ -53,10 +61,13 @@
 
     // --- グラフ設定 ---
     const ctx = document.getElementById('gyroChart').getContext('2d');
-    const maxPoints = 50; // 表示するデータ点数
+    const maxPoints = 50; 
     
-    // 初期データ配列 (0埋め)
-    const initialData = Array(maxPoints).fill(0);
+    // データ配列の初期化
+    const initialDataX = Array(maxPoints).fill(0);
+    const initialDataY = Array(maxPoints).fill(0);
+    const initialDataZ = Array(maxPoints).fill(0);
+    // ラベル配列（空文字）の初期化
     const initialLabels = Array(maxPoints).fill('');
 
     const chart = new Chart(ctx, {
@@ -64,33 +75,48 @@
         data: {
             labels: initialLabels,
             datasets: [
-                { label: 'X', data: [...initialData], borderColor: 'rgb(255, 99, 132)', borderWidth: 2, pointRadius: 0 },
-                { label: 'Y', data: [...initialData], borderColor: 'rgb(54, 162, 235)', borderWidth: 2, pointRadius: 0 },
-                { label: 'Z', data: [...initialData], borderColor: 'rgb(75, 192, 192)', borderWidth: 2, pointRadius: 0 }
+                { label: 'X', data: initialDataX, borderColor: 'rgb(255, 99, 132)', borderWidth: 2, pointRadius: 0 },
+                { label: 'Y', data: initialDataY, borderColor: 'rgb(54, 162, 235)', borderWidth: 2, pointRadius: 0 },
+                { label: 'Z', data: initialDataZ, borderColor: 'rgb(75, 192, 192)', borderWidth: 2, pointRadius: 0 }
             ]
         },
         options: {
-            animation: false, // 高速化のためアニメーションOFF
-            scales: { y: { min: -300, max: 300 } },
-            elements: { line: { tension: 0.1 } } // 少し滑らかに
+            responsive: true,
+            animation: false, // 描画パフォーマンス優先
+            interaction: { mode: 'index', intersect: false },
+            scales: {
+                y: { 
+                    // 範囲を固定せず自動調整（動きが見えやすくなります）
+                    // min: -300, max: 300 
+                    suggestedMin: -50,
+                    suggestedMax: 50
+                }
+            }
         }
     });
+
+    // --- ログ出力用関数 ---
+    function log(msg) {
+        const logBox = document.getElementById('debug-log');
+        logBox.innerHTML = msg + "<br>" + logBox.innerHTML.slice(0, 1000); // 最新を上に
+        console.log(msg); // ブラウザコンソールにも出力
+    }
 
     // --- 接続処理 ---
     document.getElementById('btnConnect').addEventListener('click', async () => {
         try {
+            log("デバイス検索中...");
             const device = await navigator.bluetooth.requestDevice({
                 filters: [{ namePrefix: "XIAO" }],
                 optionalServices: [SERVICE_UUID]
             });
 
+            log("接続中...");
             const server = await device.gatt.connect();
             const service = await server.getPrimaryService(SERVICE_UUID);
             
-            // LED書き込み用
             ledCharacteristic = await service.getCharacteristic(CHAR_LED_UUID);
             
-            // ジャイロ通知用
             const gyroChar = await service.getCharacteristic(CHAR_GYRO_UUID);
             await gyroChar.startNotifications();
             gyroChar.addEventListener('characteristicvaluechanged', handleGyroData);
@@ -98,54 +124,57 @@
             // UI更新
             document.getElementById('btnConnect').disabled = true;
             document.getElementById('btnConnect').textContent = "接続済み";
-            document.getElementById('btnRed').disabled = false;
-            document.getElementById('btnBlue').disabled = false;
-            document.getElementById('btnOff').disabled = false;
+            document.querySelectorAll('button:disabled').forEach(b => b.disabled = false);
 
-            // タイマー開始
             startTime = Date.now();
             timerInterval = setInterval(updateTimer, 100);
+            log("通信開始: 通知を待機しています");
 
         } catch (e) {
             console.error(e);
+            log("エラー: " + e);
             alert("接続エラー: " + e);
         }
     });
 
-    // --- データ受信とグラフ更新 ---
+    // --- データ受信とグラフ更新 (検証ロジック入り) ---
     function handleGyroData(event) {
         const value = event.target.value;
         const x = value.getFloat32(0, true);
         const y = value.getFloat32(4, true);
         const z = value.getFloat32(8, true);
 
-        // 数値表示
+        // 数値表示更新
         document.getElementById('valX').textContent = x.toFixed(2);
         document.getElementById('valY').textContent = y.toFixed(2);
         document.getElementById('valZ').textContent = z.toFixed(2);
 
-        // グラフ更新 (ここを修正しました)
-        // データセット配列の 0, 1, 2番目にそれぞれアクセスして操作します
-        removeFirst(chart);
-        addLast(chart, x, y, z);
-        chart.update();
-    }
+        // ★修正ポイント: ラベルとデータの同期更新
+        // 1. ラベル（X軸）の更新
+        chart.data.labels.shift(); // 先頭削除
+        chart.data.labels.push(''); // 末尾追加（これをしないとデータと数が合わなくなる）
 
-    function removeFirst(chart) {
-        // 全データセットの先頭を削除
-        chart.data.datasets.forEach((dataset) => {
-            dataset.data.shift();
-        });
-    }
-
-    function addLast(chart, x, y, z) {
-        // 各軸のデータを追加
+        // 2. データ（Y軸）の更新
+        chart.data.datasets.data.shift();
         chart.data.datasets.data.push(x);
-        chart.data.datasets[2].data.push(y);
-        chart.data.datasets[3].data.push(z);
+        
+        chart.data.datasets[1].data.shift();
+        chart.data.datasets[1].data.push(y);
+        
+        chart.data.datasets[2].data.shift();
+        chart.data.datasets[2].data.push(z);
+
+        // 3. グラフ再描画 (アニメーションなしモードで即時反映)
+        chart.update('none');
+
+        // ★検証ログ: 1秒に1回程度、配列の末尾の値を確認
+        if (Math.random() < 0.1) {
+            const len = chart.data.datasets.data.length;
+            const lastVal = chart.data.datasets.data[len-1];
+            log(`Graph Update: Count=${len}, LastX=${lastVal.toFixed(2)}`);
+        }
     }
 
-    // --- タイマー表示 ---
     function updateTimer() {
         const diff = Date.now() - startTime;
         const d = new Date(diff);
@@ -155,10 +184,10 @@
         document.getElementById('timer').textContent = `${m}:${s}.${ms}`;
     }
 
-    // --- LEDボタン ---
     async function sendLed(cmd) {
         if (ledCharacteristic) {
             try {
+                log(`LED送信: ${cmd}`);
                 await ledCharacteristic.writeValue(new Uint8Array([cmd]));
             } catch(e) { console.error(e); }
         }
