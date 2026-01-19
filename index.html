@@ -2,49 +2,81 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>XIAO Simple Graph</title>
+    <title>XIAO Gyro Monitor</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; padding: 20px; }
-        .container { max-width: 800px; margin: 0 auto; }
-        button { padding: 10px 20px; font-size: 1.2em; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 5px; }
-        #status { margin: 10px; color: #666; }
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .controls { margin: 20px 0; }
+        button { padding: 10px 20px; margin: 0 5px; cursor: pointer; border: none; border-radius: 4px; color: white; font-size: 1em; }
+        #btnConnect { background: #2196F3; }
+        #btnRed { background: #F44336; }
+        #btnBlue { background: #2196F3; }
+        #btnOff { background: #9E9E9E; }
+        button:disabled { background: #ddd; cursor: not-allowed; }
+        #timer { font-size: 1.5em; font-weight: bold; color: #333; margin: 10px 0; }
+        .values { display: flex; justify-content: space-around; margin-bottom: 10px; font-family: monospace; font-size: 1.2em; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>XIAO Gyro リアルタイムグラフ</h2>
-    <button id="btnConnect">接続する</button>
-    <div id="status">未接続</div>
-    <div id="values">X: 0.00, Y: 0.00, Z: 0.00</div>
+    <h2>XIAO ジャイロ グラフ & LED操作</h2>
+    
+    <div id="timer">00:00:00</div>
+    
+    <div class="controls">
+        <button id="btnConnect">接続開始</button>
+        <span style="margin-left: 20px;">LED操作: </span>
+        <button id="btnRed" disabled>赤</button>
+        <button id="btnBlue" disabled>青</button>
+        <button id="btnOff" disabled>消灯</button>
+    </div>
+
+    <div class="values">
+        <span style="color:rgb(255, 99, 132)">X: <span id="valX">0.00</span></span>
+        <span style="color:rgb(54, 162, 235)">Y: <span id="valY">0.00</span></span>
+        <span style="color:rgb(75, 192, 192)">Z: <span id="valZ">0.00</span></span>
+    </div>
+
     <canvas id="gyroChart"></canvas>
 </div>
 
 <script>
     const SERVICE_UUID   = '12345678-1234-5678-1234-56789abcdef0';
     const CHAR_GYRO_UUID = '12345678-1234-5678-1234-56789abcdef1';
+    const CHAR_LED_UUID  = '12345678-1234-5678-1234-56789abcdef2';
 
-    // グラフ初期化
+    let ledCharacteristic;
+    let startTime;
+    let timerInterval;
+
+    // --- グラフ設定 ---
     const ctx = document.getElementById('gyroChart').getContext('2d');
-    const maxDataPoints = 100; // 横軸のデータ数
+    const maxPoints = 50; // 表示するデータ点数
+    
+    // 初期データ配列 (0埋め)
+    const initialData = Array(maxPoints).fill(0);
+    const initialLabels = Array(maxPoints).fill('');
+
     const chart = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: Array(maxDataPoints).fill(''),
+            labels: initialLabels,
             datasets: [
-                { label: 'X', data: Array(maxDataPoints).fill(0), borderColor: 'red', borderWidth: 1, pointRadius: 0 },
-                { label: 'Y', data: Array(maxDataPoints).fill(0), borderColor: 'blue', borderWidth: 1, pointRadius: 0 },
-                { label: 'Z', data: Array(maxDataPoints).fill(0), borderColor: 'green', borderWidth: 1, pointRadius: 0 }
+                { label: 'X', data: [...initialData], borderColor: 'rgb(255, 99, 132)', borderWidth: 2, pointRadius: 0 },
+                { label: 'Y', data: [...initialData], borderColor: 'rgb(54, 162, 235)', borderWidth: 2, pointRadius: 0 },
+                { label: 'Z', data: [...initialData], borderColor: 'rgb(75, 192, 192)', borderWidth: 2, pointRadius: 0 }
             ]
         },
         options: {
-            animation: false,
-            scales: { y: { min: -250, max: 250 } }
+            animation: false, // 高速化のためアニメーションOFF
+            scales: { y: { min: -300, max: 300 } },
+            elements: { line: { tension: 0.1 } } // 少し滑らかに
         }
     });
 
+    // --- 接続処理 ---
     document.getElementById('btnConnect').addEventListener('click', async () => {
         try {
             const device = await navigator.bluetooth.requestDevice({
@@ -52,43 +84,89 @@
                 optionalServices: [SERVICE_UUID]
             });
 
-            document.getElementById('status').textContent = "接続中...";
             const server = await device.gatt.connect();
             const service = await server.getPrimaryService(SERVICE_UUID);
-            const characteristic = await service.getCharacteristic(CHAR_GYRO_UUID);
+            
+            // LED書き込み用
+            ledCharacteristic = await service.getCharacteristic(CHAR_LED_UUID);
+            
+            // ジャイロ通知用
+            const gyroChar = await service.getCharacteristic(CHAR_GYRO_UUID);
+            await gyroChar.startNotifications();
+            gyroChar.addEventListener('characteristicvaluechanged', handleGyroData);
 
-            await characteristic.startNotifications();
-            characteristic.addEventListener('characteristicvaluechanged', handleData);
-
-            document.getElementById('status').textContent = "受信中: " + device.name;
+            // UI更新
             document.getElementById('btnConnect').disabled = true;
+            document.getElementById('btnConnect').textContent = "接続済み";
+            document.getElementById('btnRed').disabled = false;
+            document.getElementById('btnBlue').disabled = false;
+            document.getElementById('btnOff').disabled = false;
 
-        } catch (error) {
-            console.error(error);
-            document.getElementById('status').textContent = "エラー: " + error;
+            // タイマー開始
+            startTime = Date.now();
+            timerInterval = setInterval(updateTimer, 100);
+
+        } catch (e) {
+            console.error(e);
+            alert("接続エラー: " + e);
         }
     });
 
-    function handleData(event) {
+    // --- データ受信とグラフ更新 ---
+    function handleGyroData(event) {
         const value = event.target.value;
-        // 12バイト (float x 3) を読み取る
         const x = value.getFloat32(0, true);
         const y = value.getFloat32(4, true);
         const z = value.getFloat32(8, true);
 
-        // 数値表示更新
-        document.getElementById('values').textContent = 
-            `X: ${x.toFixed(2)}, Y: ${y.toFixed(2)}, Z: ${z.toFixed(2)}`;
+        // 数値表示
+        document.getElementById('valX').textContent = x.toFixed(2);
+        document.getElementById('valY').textContent = y.toFixed(2);
+        document.getElementById('valZ').textContent = z.toFixed(2);
 
-        // グラフ更新 (古いデータを削除して新しいデータを追加)
-        chart.data.datasets.data.shift();
-        chart.data.datasets.data.push(x);
-        chart.data.datasets[2].data.shift();
-        chart.data.datasets[2].data.push(y);
-        chart.data.datasets[3].data.shift();
-        chart.data.datasets[3].data.push(z);
+        // グラフ更新 (ここを修正しました)
+        // データセット配列の 0, 1, 2番目にそれぞれアクセスして操作します
+        removeFirst(chart);
+        addLast(chart, x, y, z);
         chart.update();
     }
+
+    function removeFirst(chart) {
+        // 全データセットの先頭を削除
+        chart.data.datasets.forEach((dataset) => {
+            dataset.data.shift();
+        });
+    }
+
+    function addLast(chart, x, y, z) {
+        // 各軸のデータを追加
+        chart.data.datasets.data.push(x);
+        chart.data.datasets[2].data.push(y);
+        chart.data.datasets[3].data.push(z);
+    }
+
+    // --- タイマー表示 ---
+    function updateTimer() {
+        const diff = Date.now() - startTime;
+        const d = new Date(diff);
+        const m = String(d.getUTCMinutes()).padStart(2, '0');
+        const s = String(d.getUTCSeconds()).padStart(2, '0');
+        const ms = String(Math.floor(d.getUTCMilliseconds()/100)).padStart(1, '0');
+        document.getElementById('timer').textContent = `${m}:${s}.${ms}`;
+    }
+
+    // --- LEDボタン ---
+    async function sendLed(cmd) {
+        if (ledCharacteristic) {
+            try {
+                await ledCharacteristic.writeValue(new Uint8Array([cmd]));
+            } catch(e) { console.error(e); }
+        }
+    }
+    document.getElementById('btnRed').onclick = () => sendLed(1);
+    document.getElementById('btnBlue').onclick = () => sendLed(2);
+    document.getElementById('btnOff').onclick = () => sendLed(0);
+
 </script>
 </body>
 </html>
