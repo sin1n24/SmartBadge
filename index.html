@@ -2,72 +2,79 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>XIAO Gyro Graph (Robust)</title>
-    <!-- 最新のChart.jsを読み込み -->
+    <title>XIAO Attitude Monitor</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f5f5f5; }
-        .container { max-width: 900px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; }
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         .controls { margin: 20px 0; }
-        button { padding: 10px 20px; margin: 0 5px; cursor: pointer; border: none; border-radius: 4px; color: white; font-size: 1em; }
+        button { padding: 12px 24px; margin: 0 5px; cursor: pointer; border: none; border-radius: 6px; color: white; font-size: 1em; transition: opacity 0.2s; }
+        button:hover { opacity: 0.8; }
         #btnConnect { background: #2196F3; }
         #btnRed { background: #F44336; }
         #btnBlue { background: #2196F3; }
-        #btnOff { background: #9E9E9E; }
-        button:disabled { background: #ddd; cursor: not-allowed; }
-        #timer { font-size: 1.5em; font-weight: bold; color: #333; margin: 10px 0; }
-        .values { display: flex; justify-content: space-around; margin-bottom: 10px; font-family: monospace; font-size: 1.2em; }
+        #btnOff { background: #607D8B; }
+        button:disabled { background: #cfd8dc; cursor: not-allowed; }
+        #timer { font-size: 1.5em; font-weight: bold; color: #37474f; margin: 10px 0; }
         
-        /* ログ表示エリア */
-        #debug-log { 
-            text-align: left; font-family: monospace; font-size: 0.8em; color: #555; 
-            background: #eee; padding: 10px; margin-top: 20px; height: 100px; overflow-y: scroll; border: 1px solid #ccc;
-        }
+        .val-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+        .val-card { background: #fafafa; padding: 10px; border-radius: 8px; border: 1px solid #eee; }
+        .val-label { display: block; font-size: 0.9em; color: #666; margin-bottom: 5px; }
+        .val-num { font-family: monospace; font-size: 1.4em; font-weight: bold; }
+        
+        #debug-log { text-align: left; font-family: monospace; font-size: 0.8em; color: #78909c; background: #eceff1; padding: 10px; margin-top: 20px; height: 80px; overflow-y: scroll; border-radius: 4px; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>XIAO ジャイロ グラフ (確定版)</h2>
+    <h2>XIAO 姿勢角モニター (Roll/Pitch/Yaw)</h2>
     
     <div id="timer">00:00:00</div>
     
     <div class="controls">
         <button id="btnConnect">接続開始</button>
-        <span style="margin-left: 20px;">LED操作: </span>
+        <span style="margin-left: 20px;">LED: </span>
         <button id="btnRed" disabled>赤</button>
         <button id="btnBlue" disabled>青</button>
         <button id="btnOff" disabled>消灯</button>
     </div>
 
-    <div class="values">
-        <span style="color:rgb(255, 99, 132)">X: <span id="valX">0.00</span></span>
-        <span style="color:rgb(54, 162, 235)">Y: <span id="valY">0.00</span></span>
-        <span style="color:rgb(75, 192, 192)">Z: <span id="valZ">0.00</span></span>
+    <div class="val-grid">
+        <div class="val-card" style="border-bottom: 3px solid rgb(255, 99, 132)">
+            <span class="val-label">Roll (回転)</span>
+            <span id="valRoll" class="val-num" style="color:rgb(255, 99, 132)">0.00</span>°
+        </div>
+        <div class="val-card" style="border-bottom: 3px solid rgb(54, 162, 235)">
+            <span class="val-label">Pitch (前後)</span>
+            <span id="valPitch" class="val-num" style="color:rgb(54, 162, 235)">0.00</span>°
+        </div>
+        <div class="val-card" style="border-bottom: 3px solid rgb(75, 192, 192)">
+            <span class="val-label">Yaw (方位)</span>
+            <span id="valYaw" class="val-num" style="color:rgb(75, 192, 192)">0.00</span>°
+        </div>
     </div>
 
-    <canvas id="gyroChart"></canvas>
+    <canvas id="angleChart"></canvas>
     <div id="debug-log">準備完了</div>
 </div>
 
 <script>
     const SERVICE_UUID   = '12345678-1234-5678-1234-56789abcdef0';
-    const CHAR_GYRO_UUID = '12345678-1234-5678-1234-56789abcdef1';
+    const CHAR_ANGLE_UUID = '12345678-1234-5678-1234-56789abcdef1';
     const CHAR_LED_UUID  = '12345678-1234-5678-1234-56789abcdef2';
 
     let ledCharacteristic;
     let startTime;
-    let timerInterval;
     let chart;
 
-    // ★重要: データ配列をグローバル変数として自分で管理する
-    const maxPoints = 50;
+    // データ配列（グローバル管理で安定化）
+    const maxPoints = 100;
     const labelsData = new Array(maxPoints).fill('');
-    const xData = new Array(maxPoints).fill(0);
-    const yData = new Array(maxPoints).fill(0);
-    const zData = new Array(maxPoints).fill(0);
+    const rollData   = new Array(maxPoints).fill(0);
+    const pitchData  = new Array(maxPoints).fill(0);
+    const yawData    = new Array(maxPoints).fill(0);
 
-    // --- ログ関数 ---
     function log(msg) {
         const logBox = document.getElementById('debug-log');
         const ts = new Date().toLocaleTimeString();
@@ -75,33 +82,35 @@
         console.log(msg);
     }
 
-    // --- グラフ初期化 ---
     function initChart() {
-        const ctx = document.getElementById('gyroChart').getContext('2d');
-        
+        const ctx = document.getElementById('angleChart').getContext('2d');
         chart = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: labelsData, // 自分の配列を渡す
+                labels: labelsData,
                 datasets: [
-                    { label: 'X', data: xData, borderColor: 'rgb(255, 99, 132)', borderWidth: 2, pointRadius: 0 },
-                    { label: 'Y', data: yData, borderColor: 'rgb(54, 162, 235)', borderWidth: 2, pointRadius: 0 },
-                    { label: 'Z', data: zData, borderColor: 'rgb(75, 192, 192)', borderWidth: 2, pointRadius: 0 }
+                    { label: 'Roll', data: rollData, borderColor: 'rgb(255, 99, 132)', borderWidth: 2, pointRadius: 0 },
+                    { label: 'Pitch', data: pitchData, borderColor: 'rgb(54, 162, 235)', borderWidth: 2, pointRadius: 0 },
+                    { label: 'Yaw', data: yawData, borderColor: 'rgb(75, 192, 192)', borderWidth: 2, pointRadius: 0 }
                 ]
             },
             options: {
                 responsive: true,
-                animation: false, // 高速化のためアニメーションOFF
+                animation: false,
                 interaction: { intersect: false },
                 scales: {
-                    y: { suggestedMin: -200, suggestedMax: 200 }
+                    y: { 
+                        min: -180, max: 180, // 角度なので±180度に設定
+                        ticks: { stepSize: 45 }
+                    }
+                },
+                plugins: {
+                    legend: { position: 'top' }
                 }
             }
         });
-        log("グラフ初期化完了");
     }
 
-    // --- 接続処理 ---
     document.getElementById('btnConnect').addEventListener('click', async () => {
         try {
             if (!chart) initChart();
@@ -117,59 +126,47 @@
             
             ledCharacteristic = await service.getCharacteristic(CHAR_LED_UUID);
             
-            const gyroChar = await service.getCharacteristic(CHAR_GYRO_UUID);
-            await gyroChar.startNotifications();
-            gyroChar.addEventListener('characteristicvaluechanged', handleGyroData);
+            const angleChar = await service.getCharacteristic(CHAR_ANGLE_UUID);
+            await angleChar.startNotifications();
+            angleChar.addEventListener('characteristicvaluechanged', handleAngleData);
 
             document.getElementById('btnConnect').disabled = true;
             document.getElementById('btnConnect').textContent = "接続済み";
             document.querySelectorAll('button:disabled').forEach(b => b.disabled = false);
 
             startTime = Date.now();
-            timerInterval = setInterval(updateTimer, 100);
-            log("通信開始: データを受信しています...");
+            setInterval(updateTimer, 100);
+            log("姿勢データ受信開始");
 
         } catch (e) {
-            console.error(e);
             log("エラー: " + e);
-            alert("接続エラー: " + e);
+            alert("接続エラー: デバイスを再起動するか、ペアリングを解除して再試行してください");
         }
     });
 
-    // --- データ受信とグラフ更新 ---
-    function handleGyroData(event) {
+    function handleAngleData(event) {
         try {
             const value = event.target.value;
-            const x = value.getFloat32(0, true);
-            const y = value.getFloat32(4, true);
-            const z = value.getFloat32(8, true);
+            // リトルエンディアンでFloat32を3つ読み取る
+            const roll = value.getFloat32(0, true);
+            const pitch = value.getFloat32(4, true);
+            const yaw = value.getFloat32(8, true);
 
-            // 数値表示
-            document.getElementById('valX').textContent = x.toFixed(2);
-            document.getElementById('valY').textContent = y.toFixed(2);
-            document.getElementById('valZ').textContent = z.toFixed(2);
+            // 数値表示更新
+            document.getElementById('valRoll').textContent = roll.toFixed(1);
+            document.getElementById('valPitch').textContent = pitch.toFixed(1);
+            document.getElementById('valYaw').textContent = yaw.toFixed(1);
 
-            // ★修正ポイント: グローバル配列を直接操作する
-            // これなら "Cannot read properties of undefined" は絶対に起きません
-            
-            // 1. 先頭を削除
-            labelsData.shift();
-            xData.shift();
-            yData.shift();
-            zData.shift();
+            // グラフデータ更新 (シフト＆プッシュ)
+            labelsData.shift(); labelsData.push('');
+            rollData.shift();   rollData.push(roll);
+            pitchData.shift();  pitchData.push(pitch);
+            yawData.shift();    yawData.push(yaw);
 
-            // 2. 末尾に追加
-            labelsData.push('');
-            xData.push(x);
-            yData.push(y);
-            zData.push(z);
-
-            // 3. グラフに「変更があったよ」と伝えて再描画
-            chart.update('none'); // 'none'モードでアニメーションなし更新
+            chart.update('none');
 
         } catch (e) {
             console.error(e);
-            log("データ処理エラー: " + e.message);
         }
     }
 
@@ -186,19 +183,16 @@
         if (ledCharacteristic) {
             try {
                 await ledCharacteristic.writeValue(new Uint8Array([cmd]));
-                log("LED送信: " + cmd);
             } catch(e) { log("LEDエラー: " + e); }
         }
     }
     
-    // イベント登録
     document.getElementById('btnRed').onclick = () => sendLed(1);
     document.getElementById('btnBlue').onclick = () => sendLed(2);
     document.getElementById('btnOff').onclick = () => sendLed(0);
 
-    // ページ読み込み時にグラフを表示しておく
+    // 初期化
     initChart();
-
 </script>
 </body>
 </html>
