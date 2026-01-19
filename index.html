@@ -2,78 +2,108 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>XIAO Data Receiver</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XIAO IMU Connect</title>
     <style>
-        body { font-family: monospace; text-align: center; padding: 20px; font-size: 1.2em; }
-        .val { color: blue; font-weight: bold; }
-        button { padding: 10px 20px; font-size: 1em; }
+        body { font-family: sans-serif; text-align: center; padding: 20px; background-color: #f0f2f5; }
+        h2 { color: #333; }
+        .card { 
+            background: white; padding: 30px; border-radius: 15px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1); 
+            display: inline-block; min-width: 300px;
+        }
+        .val-row { display: flex; justify-content: space-between; margin: 15px 0; font-size: 1.5em; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+        .label { font-weight: bold; color: #555; }
+        .value { font-family: monospace; color: #007bff; }
+        button { 
+            padding: 15px 30px; font-size: 1.2em; cursor: pointer; 
+            background-color: #28a745; color: white; border: none; 
+            border-radius: 8px; transition: 0.3s; 
+        }
+        button:hover { background-color: #218838; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        #status { margin-top: 15px; color: #666; font-size: 0.9em; }
     </style>
 </head>
 <body>
-    <h2>XIAO データ受信 (0xFFFF)</h2>
-    <button id="btnScan">スキャン開始</button>
-    <div id="status" style="margin: 15px; color: #666;">待機中...</div>
-    <hr>
-    <div>
-        RSSI: <span id="rssi">--</span> dBm <br>
-        Count: <span id="cnt">0</span>
-    </div>
-    <div style="margin-top: 20px; text-align: left; display: inline-block;">
-        Gyro X: <span id="gx" class="val">0.00</span> <br>
-        Gyro Y: <span id="gy" class="val">0.00</span> <br>
-        Gyro Z: <span id="gz" class="val">0.00</span>
+
+    <h2>XIAO ジャイロ接続 (Notify)</h2>
+    
+    <div class="card">
+        <button id="btnConnect">接続する</button>
+        <div id="status">未接続</div>
+        <hr>
+        <div class="val-row"><span class="label">X:</span> <span id="gx" class="value">0.00</span></div>
+        <div class="val-row"><span class="label">Y:</span> <span id="gy" class="value">0.00</span></div>
+        <div class="val-row"><span class="label">Z:</span> <span id="gz" class="value">0.00</span></div>
     </div>
 
     <script>
-        const btnScan = document.getElementById('btnScan');
-        const TEST_ID = 0xFFFF; // 今回使用するID
+        // C++側で定義したUUID (小文字で記述)
+        const SERVICE_UUID = '12345678-1234-5678-1234-56789abcdef0';
+        const CHAR_UUID    = '12345678-1234-5678-1234-56789abcdef1';
 
-        btnScan.addEventListener('click', async () => {
+        const btnConnect = document.getElementById('btnConnect');
+        const statusDiv = document.getElementById('status');
+        let bluetoothDevice;
+        let bluetoothCharacteristic;
+
+        btnConnect.addEventListener('click', connect);
+
+        async function connect() {
             try {
-                document.getElementById('status').textContent = "デバイスを選択してください...";
-
-                // 1. 0xFFFF のデータを持つデバイスを探す
-                const device = await navigator.bluetooth.requestDevice({
-                    filters: [{ namePrefix: "XIAO" }],
-                    optionalManufacturerData: [TEST_ID]
-                });
-
-                document.getElementById('status').textContent = "受信中: " + device.name;
+                statusDiv.textContent = "デバイスを検索中...";
                 
-                // 2. 監視開始
-                await device.watchAdvertisements();
-
-                // 3. データ受信イベント
-                device.addEventListener('advertisementreceived', (event) => {
-                    document.getElementById('rssi').textContent = event.rssi;
-                    document.getElementById('cnt').textContent = parseInt(document.getElementById('cnt').textContent) + 1;
-
-                    // Manufacturer Data (0xFFFF) を取得
-                    // ブラウザは自動的にCompany ID (最初の2バイト) をキーとして解釈します
-                    const data = event.manufacturerData.get(TEST_ID);
-                    
-                    if (data) {
-                        // データ長さチェック (今回は3軸 x 2byte = 6byte)
-                        // ※ C++側では8byte送りましたが、CompanyID(2byte)はキーになるため、
-                        //    ここ(value)には残りの6byteが入ってきます。
-                        if (data.byteLength >= 6) {
-                            // リトルエンディアンで読み取り、100で割る
-                            const x = data.getInt16(0, true) / 100.0;
-                            const y = data.getInt16(2, true) / 100.0;
-                            const z = data.getInt16(4, true) / 100.0;
-
-                            document.getElementById('gx').textContent = x.toFixed(2);
-                            document.getElementById('gy').textContent = y.toFixed(2);
-                            document.getElementById('gz').textContent = z.toFixed(2);
-                        }
-                    }
+                // 1. デバイスをスキャン (特定のサービスを持つデバイスを探す)
+                bluetoothDevice = await navigator.bluetooth.requestDevice({
+                    filters: [{ namePrefix: "XIAO" }],
+                    optionalServices: [SERVICE_UUID]
                 });
+
+                bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
+                statusDiv.textContent = "接続中...";
+
+                // 2. GATTサーバーに接続
+                const server = await bluetoothDevice.gatt.connect();
+                
+                // 3. サービスを取得
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                
+                // 4. キャラクタリスティックを取得
+                bluetoothCharacteristic = await service.getCharacteristic(CHAR_UUID);
+
+                // 5. 通知 (Notify) を開始
+                await bluetoothCharacteristic.startNotifications();
+                bluetoothCharacteristic.addEventListener('characteristicvaluechanged', handleNotifications);
+
+                statusDiv.textContent = "受信中 (" + bluetoothDevice.name + ")";
+                btnConnect.disabled = true;
+                btnConnect.textContent = "接続済み";
 
             } catch (error) {
                 console.error(error);
-                document.getElementById('status').textContent = "エラー: " + error;
+                statusDiv.textContent = "エラー: " + error;
             }
-        });
+        }
+
+        function handleNotifications(event) {
+            const value = event.target.value;
+            // データは float (32bit) x 3 = 12バイト
+            // リトルエンディアン (true) で読み取る
+            const x = value.getFloat32(0, true);
+            const y = value.getFloat32(4, true);
+            const z = value.getFloat32(8, true);
+
+            document.getElementById('gx').textContent = x.toFixed(2);
+            document.getElementById('gy').textContent = y.toFixed(2);
+            document.getElementById('gz').textContent = z.toFixed(2);
+        }
+
+        function onDisconnected(event) {
+            statusDiv.textContent = "切断されました";
+            btnConnect.disabled = false;
+            btnConnect.textContent = "再接続";
+        }
     </script>
 </body>
 </html>
