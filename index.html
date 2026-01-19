@@ -11,6 +11,15 @@
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; margin: 0; }
         .header { margin-bottom: 20px; }
         
+        /* タイマーのスタイル */
+        #timer {
+            font-size: 2em;
+            font-weight: bold;
+            color: #333;
+            margin: 10px 0;
+            font-family: monospace;
+        }
+
         /* 画面分割レイアウト */
         .main-container {
             display: flex;
@@ -41,8 +50,16 @@
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             height: 400px; /* 高さを固定 */
             position: relative;
+            overflow: hidden;
         }
-        #cube-canvas { width: 100%; height: 100%; display: block; }
+        
+        /* 3Dキャンバス */
+        #cube-container canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            outline: none;
+        }
 
         .controls { margin: 15px 0; }
         button { padding: 10px 15px; margin: 0 5px; cursor: pointer; border-radius: 5px; border: none; color: white; font-size: 1em; }
@@ -58,9 +75,13 @@
 
 <div class="header">
     <h2>XIAO 姿勢角 3D モニター</h2>
+    
+    <!-- 復活させたタイマー -->
+    <div id="timer">00:00:00</div>
+
     <div class="controls">
         <button id="btnConnect">接続開始</button>
-        <button id="btnCalib" disabled>校正</button>
+        <button id="btnCalib" disabled>校正 (Calibrate)</button>
         <span style="margin-left: 15px; font-size:0.9em; color:#666;">LED:</span>
         <button id="btnRed" disabled>赤</button>
         <button id="btnBlue" disabled>青</button>
@@ -94,6 +115,8 @@
 
     let ledCharacteristic;
     let chart;
+    let startTime;
+    let timerInterval = null;
     
     // データ保持用
     const maxPoints = 50;
@@ -104,7 +127,6 @@
 
     // 3D用の変数
     let camera, scene, renderer, cube;
-    // ターゲット角度（ラジアン）
     let targetRot = { x: 0, y: 0, z: 0 };
 
     // --- 初期化処理 ---
@@ -147,8 +169,7 @@
         scene.background = new THREE.Color(0xffffff);
 
         camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
-        camera.position.z = 5;
-        camera.position.y = 2;
+        camera.position.set(0, 2, 5); // 少し上から見下ろす
         camera.lookAt(0, 0, 0);
 
         renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -165,7 +186,7 @@
         // 直方体 (XIAOのような形状)
         const geometry = new THREE.BoxGeometry(1.5, 0.2, 2.0); // 幅, 高さ, 奥行き
         
-        // 面ごとに色を変える（上:青, 下:灰, ほか:白）
+        // 面ごとに色を変える（上:青, 下:灰, 前:黄(USB), 他:白）
         const materials = [
             new THREE.MeshLambertMaterial({ color: 0xdddddd }), // Right
             new THREE.MeshLambertMaterial({ color: 0xdddddd }), // Left
@@ -196,12 +217,6 @@
         requestAnimationFrame(animate3D);
         
         // 回転を滑らかに更新 (Lerp)
-        // Three.jsの回転順序はデフォルトXYZ。
-        // IMUの軸定義に合わせて適用:
-        // Pitch -> X軸回転
-        // Yaw   -> Y軸回転
-        // Roll  -> Z軸回転
-        
         // 補間係数 0.1 でゆっくり追従させる
         cube.rotation.x += (targetRot.x - cube.rotation.x) * 0.1;
         cube.rotation.y += (targetRot.y - cube.rotation.y) * 0.1;
@@ -218,11 +233,8 @@
                 optionalServices: [SERVICE_UUID]
             });
 
-            device.addEventListener('gattserverdisconnected', () => {
-                document.getElementById('status').textContent = "切断されました";
-                document.getElementById('btnConnect').disabled = false;
-                document.querySelectorAll('button:not(#btnConnect)').forEach(b => b.disabled = true);
-            });
+            // 切断時の処理
+            device.addEventListener('gattserverdisconnected', onDisconnected);
 
             const server = await device.gatt.connect();
             const service = await server.getPrimaryService(SERVICE_UUID);
@@ -237,11 +249,21 @@
             document.getElementById('btnConnect').disabled = true;
             document.querySelectorAll('button:disabled').forEach(b => b.disabled = false);
 
+            // タイマースタート
+            startTimer();
+
         } catch (e) {
             console.error(e);
             alert("接続エラー: " + e);
         }
     });
+
+    function onDisconnected() {
+        document.getElementById('status').textContent = "切断されました";
+        document.getElementById('btnConnect').disabled = false;
+        document.querySelectorAll('button:not(#btnConnect)').forEach(b => b.disabled = true);
+        stopTimer();
+    }
 
     function handleData(event) {
         const value = event.target.value;
@@ -262,15 +284,37 @@
         chart.update('none');
 
         // 3D回転ターゲットの更新 (度 -> ラジアン)
-        // 軸の向きは実際の動きを見て符号(+/-)や割り当て(xyz)を調整してください
-        // 一般的な航空力学系: 
-        // Pitch(前後) -> X軸
-        // Yaw(方位)   -> Y軸 (マイナスにすると直感的な回転方向になる場合あり)
-        // Roll(回転)  -> Z軸
+        // Three.jsの回転順序はデフォルトXYZ
         
         targetRot.x = pitch * (Math.PI / 180);
-        targetRot.y = -yaw * (Math.PI / 180); // Three.jsのY軸は逆回転に見えることがあるため反転
-        targetRot.z = roll * (Math.PI / 180); // 傾き方向の調整
+        targetRot.y = -yaw * (Math.PI / 180); // Y軸(方位)は逆回転に見えることがあるため反転
+        
+        // ★修正ポイント: Rollの符号を正に修正 (以前はマイナスでした)
+        targetRot.z = roll * (Math.PI / 180); 
+    }
+
+    // --- タイマー関数 ---
+    function startTimer() {
+        if(timerInterval) clearInterval(timerInterval);
+        startTime = Date.now();
+        updateTimer();
+        timerInterval = setInterval(updateTimer, 100); // 0.1秒更新
+    }
+
+    function stopTimer() {
+        if(timerInterval) {
+            clearInterval(timerInterval);
+            timerInterval = null;
+        }
+    }
+
+    function updateTimer() {
+        const diff = Date.now() - startTime;
+        const d = new Date(diff);
+        const m = String(d.getUTCMinutes()).padStart(2, '0');
+        const s = String(d.getUTCSeconds()).padStart(2, '0');
+        const ms = String(Math.floor(d.getUTCMilliseconds()/100)).padStart(1, '0');
+        document.getElementById('timer').textContent = `${m}:${s}.${ms}`;
     }
 
     // --- LED & 校正コマンド ---
@@ -288,5 +332,3 @@
 </script>
 </body>
 </html>
-
-
