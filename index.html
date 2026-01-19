@@ -2,91 +2,119 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>XIAO Attitude Controller</title>
+    <title>XIAO 3D IMU Monitor</title>
+    <!-- Chart.js (グラフ用) -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Three.js (3D描画用) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; }
-        .container { max-width: 900px; margin: 0 auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        .controls { margin: 20px 0; display: flex; justify-content: center; gap: 10px; align-items: center; }
-        button { padding: 12px 20px; cursor: pointer; border: none; border-radius: 6px; color: white; font-size: 1em; transition: 0.2s; }
-        button:hover { opacity: 0.8; }
-        button:disabled { background: #cfd8dc !important; cursor: not-allowed; }
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; margin: 0; }
+        .header { margin-bottom: 20px; }
         
-        #btnConnect { background: #2196F3; }
-        #btnRed { background: #F44336; }
-        #btnBlue { background: #2196F3; }
-        #btnOff { background: #607D8B; }
-        #btnCalib { background: #FF9800; font-weight: bold; } /* オレンジ色 */
+        /* 画面分割レイアウト */
+        .main-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        /* 左側：グラフエリア */
+        .graph-area {
+            flex: 1;
+            min-width: 300px;
+            background: white;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
 
-        #timer { font-size: 1.5em; font-weight: bold; color: #37474f; margin: 10px 0; }
-        
-        .val-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 15px; }
-        .val-card { background: #fafafa; padding: 10px; border-radius: 8px; border: 1px solid #eee; }
-        .val-label { display: block; font-size: 0.9em; color: #666; margin-bottom: 5px; }
-        .val-num { font-family: monospace; font-size: 1.4em; font-weight: bold; }
-        
-        #debug-log { text-align: left; font-family: monospace; font-size: 0.8em; color: #78909c; background: #eceff1; padding: 10px; margin-top: 20px; height: 80px; overflow-y: scroll; border-radius: 4px; }
+        /* 右側：3Dキューブエリア */
+        .cube-area {
+            flex: 1;
+            min-width: 300px;
+            background: white;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            height: 400px; /* 高さを固定 */
+            position: relative;
+        }
+        #cube-canvas { width: 100%; height: 100%; display: block; }
+
+        .controls { margin: 15px 0; }
+        button { padding: 10px 15px; margin: 0 5px; cursor: pointer; border-radius: 5px; border: none; color: white; font-size: 1em; }
+        #btnConnect { background: #2196F3; }
+        #btnCalib { background: #FF9800; font-weight: bold; }
+        #btnRed { background: #F44336; } #btnBlue { background: #2196F3; } #btnOff { background: #607D8B; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+
+        .val-display { display: flex; justify-content: space-around; margin-bottom: 10px; font-family: monospace; font-size: 1.2em; }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <h2>XIAO 姿勢角 & キャリブレーション</h2>
-    
-    <div id="timer">00:00:00</div>
-    
+<div class="header">
+    <h2>XIAO 姿勢角 3D モニター</h2>
     <div class="controls">
         <button id="btnConnect">接続開始</button>
-        <div style="border-left: 1px solid #ccc; height: 30px; margin: 0 10px;"></div>
+        <button id="btnCalib" disabled>校正 (Calibrate)</button>
+        <span style="margin-left: 15px; font-size:0.9em; color:#666;">LED:</span>
         <button id="btnRed" disabled>赤</button>
         <button id="btnBlue" disabled>青</button>
         <button id="btnOff" disabled>消灯</button>
-        <button id="btnCalib" disabled>校正</button>
+    </div>
+    <div id="status">未接続</div>
+</div>
+
+<div class="main-container">
+    <!-- 左側：グラフ -->
+    <div class="graph-area">
+        <div class="val-display">
+            <span style="color:rgb(255, 99, 132)">Roll: <span id="valRoll">0.0</span></span>
+            <span style="color:rgb(54, 162, 235)">Pitch: <span id="valPitch">0.0</span></span>
+            <span style="color:rgb(75, 192, 192)">Yaw: <span id="valYaw">0.0</span></span>
+        </div>
+        <canvas id="angleChart"></canvas>
     </div>
 
-    <div class="val-grid">
-        <div class="val-card" style="border-bottom: 3px solid rgb(255, 99, 132)">
-            <span class="val-label">Roll (回転)</span>
-            <span id="valRoll" class="val-num" style="color:rgb(255, 99, 132)">0.00</span>°
-        </div>
-        <div class="val-card" style="border-bottom: 3px solid rgb(54, 162, 235)">
-            <span class="val-label">Pitch (前後)</span>
-            <span id="valPitch" class="val-num" style="color:rgb(54, 162, 235)">0.00</span>°
-        </div>
-        <div class="val-card" style="border-bottom: 3px solid rgb(75, 192, 192)">
-            <span class="val-label">Yaw (方位)</span>
-            <span id="valYaw" class="val-num" style="color:rgb(75, 192, 192)">0.00</span>°
-        </div>
+    <!-- 右側：3D View -->
+    <div class="cube-area" id="cube-container">
+        <!-- Three.jsがここにCanvasを作ります -->
     </div>
-
-    <canvas id="angleChart"></canvas>
-    <div id="debug-log">準備完了</div>
 </div>
 
 <script>
+    // --- BLE定数 ---
     const SERVICE_UUID   = '12345678-1234-5678-1234-56789abcdef0';
     const CHAR_ANGLE_UUID = '12345678-1234-5678-1234-56789abcdef1';
     const CHAR_LED_UUID  = '12345678-1234-5678-1234-56789abcdef2';
 
-    let bluetoothDevice;
     let ledCharacteristic;
-    let startTime;
-    let timerInterval = null; // タイマーID
     let chart;
-
-    const maxPoints = 100;
+    
+    // データ保持用
+    const maxPoints = 50;
     const labelsData = new Array(maxPoints).fill('');
     const rollData   = new Array(maxPoints).fill(0);
     const pitchData  = new Array(maxPoints).fill(0);
     const yawData    = new Array(maxPoints).fill(0);
 
-    function log(msg) {
-        const logBox = document.getElementById('debug-log');
-        const ts = new Date().toLocaleTimeString();
-        logBox.innerHTML = `[${ts}] ${msg}<br>` + logBox.innerHTML.slice(0, 1000);
-        console.log(msg);
-    }
+    // 3D用の変数
+    let camera, scene, renderer, cube;
+    // ターゲット角度（ラジアン）
+    let targetRot = { x: 0, y: 0, z: 0 };
 
+    // --- 初期化処理 ---
+    window.onload = function() {
+        initChart();
+        init3D();
+        animate3D();
+    };
+
+    // --- 1. Chart.js 初期化 ---
     function initChart() {
         const ctx = document.getElementById('angleChart').getContext('2d');
         chart = new Chart(ctx, {
@@ -94,125 +122,169 @@
             data: {
                 labels: labelsData,
                 datasets: [
-                    { label: 'Roll', data: rollData, borderColor: 'rgb(255, 99, 132)', borderWidth: 2, pointRadius: 0 },
-                    { label: 'Pitch', data: pitchData, borderColor: 'rgb(54, 162, 235)', borderWidth: 2, pointRadius: 0 },
-                    { label: 'Yaw', data: yawData, borderColor: 'rgb(75, 192, 192)', borderWidth: 2, pointRadius: 0 }
+                    { label: 'Roll', data: rollData, borderColor: 'rgb(255, 99, 132)', borderWidth: 1.5, pointRadius: 0 },
+                    { label: 'Pitch', data: pitchData, borderColor: 'rgb(54, 162, 235)', borderWidth: 1.5, pointRadius: 0 },
+                    { label: 'Yaw', data: yawData, borderColor: 'rgb(75, 192, 192)', borderWidth: 1.5, pointRadius: 0 }
                 ]
             },
             options: {
                 responsive: true,
                 animation: false,
-                interaction: { intersect: false },
                 scales: {
-                    y: { 
-                        min: -180, max: 180, // Y軸固定
-                        ticks: { stepSize: 45 }
-                    }
+                    y: { min: -180, max: 180, ticks: { stepSize: 45 } }
                 }
             }
         });
     }
 
+    // --- 2. Three.js (3D) 初期化 ---
+    function init3D() {
+        const container = document.getElementById('cube-container');
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xffffff);
+
+        camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
+        camera.position.z = 5;
+        camera.position.y = 2;
+        camera.lookAt(0, 0, 0);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(w, h);
+        container.appendChild(renderer.domElement);
+
+        // ライト
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+
+        // 直方体 (XIAOのような形状)
+        const geometry = new THREE.BoxGeometry(1.5, 0.2, 2.0); // 幅, 高さ, 奥行き
+        
+        // 面ごとに色を変える（上:青, 下:灰, ほか:白）
+        const materials = [
+            new THREE.MeshLambertMaterial({ color: 0xdddddd }), // Right
+            new THREE.MeshLambertMaterial({ color: 0xdddddd }), // Left
+            new THREE.MeshLambertMaterial({ color: 0x2196F3 }), // Top (青)
+            new THREE.MeshLambertMaterial({ color: 0x666666 }), // Bottom
+            new THREE.MeshLambertMaterial({ color: 0xFFC107 }), // Front (USB側・黄)
+            new THREE.MeshLambertMaterial({ color: 0xdddddd })  // Back
+        ];
+        
+        cube = new THREE.Mesh(geometry, materials);
+        scene.add(cube);
+
+        // 軸ヘルパー (R:X, G:Y, B:Z)
+        const axesHelper = new THREE.AxesHelper(3);
+        scene.add(axesHelper);
+
+        // リサイズ対応
+        window.addEventListener('resize', () => {
+            const nw = container.clientWidth;
+            const nh = container.clientHeight;
+            renderer.setSize(nw, nh);
+            camera.aspect = nw / nh;
+            camera.updateProjectionMatrix();
+        });
+    }
+
+    function animate3D() {
+        requestAnimationFrame(animate3D);
+        
+        // 回転を滑らかに更新 (Lerp)
+        // Three.jsの回転順序はデフォルトXYZ。
+        // IMUの軸定義に合わせて適用:
+        // Pitch -> X軸回転
+        // Yaw   -> Y軸回転
+        // Roll  -> Z軸回転
+        
+        // 補間係数 0.1 でゆっくり追従させる
+        cube.rotation.x += (targetRot.x - cube.rotation.x) * 0.1;
+        cube.rotation.y += (targetRot.y - cube.rotation.y) * 0.1;
+        cube.rotation.z += (targetRot.z - cube.rotation.z) * 0.1;
+
+        renderer.render(scene, camera);
+    }
+
+    // --- 3. BLE通信処理 ---
     document.getElementById('btnConnect').addEventListener('click', async () => {
         try {
-            if (!chart) initChart();
-
-            bluetoothDevice = await navigator.bluetooth.requestDevice({
+            const device = await navigator.bluetooth.requestDevice({
                 filters: [{ namePrefix: "XIAO" }],
                 optionalServices: [SERVICE_UUID]
             });
 
-            bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
+            device.addEventListener('gattserverdisconnected', () => {
+                document.getElementById('status').textContent = "切断されました";
+                document.getElementById('btnConnect').disabled = false;
+                document.querySelectorAll('button:not(#btnConnect)').forEach(b => b.disabled = true);
+            });
 
-            log("接続中: " + bluetoothDevice.name);
-            const server = await bluetoothDevice.gatt.connect();
+            const server = await device.gatt.connect();
             const service = await server.getPrimaryService(SERVICE_UUID);
             
             ledCharacteristic = await service.getCharacteristic(CHAR_LED_UUID);
-            
             const angleChar = await service.getCharacteristic(CHAR_ANGLE_UUID);
+            
             await angleChar.startNotifications();
-            angleChar.addEventListener('characteristicvaluechanged', handleAngleData);
+            angleChar.addEventListener('characteristicvaluechanged', handleData);
 
-            // UI更新
+            document.getElementById('status').textContent = "接続中: " + device.name;
             document.getElementById('btnConnect').disabled = true;
-            document.getElementById('btnConnect').textContent = "接続済み";
             document.querySelectorAll('button:disabled').forEach(b => b.disabled = false);
 
-            // タイマー開始 (リセットしてから)
-            if (timerInterval) clearInterval(timerInterval);
-            startTime = Date.now();
-            updateTimer(); // 00:00:00即時表示
-            timerInterval = setInterval(updateTimer, 100);
-            
-            log("通信開始");
-
         } catch (e) {
-            log("接続エラー: " + e);
+            console.error(e);
+            alert("接続エラー: " + e);
         }
     });
 
-    function onDisconnected(event) {
-        log("切断されました");
-        document.getElementById('btnConnect').disabled = false;
-        document.getElementById('btnConnect').textContent = "再接続";
-        document.querySelectorAll('button:not(#btnConnect)').forEach(b => b.disabled = true);
-        
-        // ★重要: 切断時にタイマーを止める
-        if (timerInterval) {
-            clearInterval(timerInterval);
-            timerInterval = null;
-        }
-    }
-
-    function handleAngleData(event) {
+    function handleData(event) {
         const value = event.target.value;
         const roll = value.getFloat32(0, true);
         const pitch = value.getFloat32(4, true);
         const yaw = value.getFloat32(8, true);
 
+        // 数値更新
         document.getElementById('valRoll').textContent = roll.toFixed(1);
         document.getElementById('valPitch').textContent = pitch.toFixed(1);
         document.getElementById('valYaw').textContent = yaw.toFixed(1);
 
+        // グラフ更新
         labelsData.shift(); labelsData.push('');
         rollData.shift();   rollData.push(roll);
         pitchData.shift();  pitchData.push(pitch);
         yawData.shift();    yawData.push(yaw);
-
         chart.update('none');
+
+        // 3D回転ターゲットの更新 (度 -> ラジアン)
+        // 軸の向きは実際の動きを見て符号(+/-)や割り当て(xyz)を調整してください
+        // 一般的な航空力学系: 
+        // Pitch(前後) -> X軸
+        // Yaw(方位)   -> Y軸 (マイナスにすると直感的な回転方向になる場合あり)
+        // Roll(回転)  -> Z軸
+        
+        targetRot.x = pitch * (Math.PI / 180);
+        targetRot.y = -yaw * (Math.PI / 180); // Three.jsのY軸は逆回転に見えることがあるため反転
+        targetRot.z = -roll * (Math.PI / 180); // 傾き方向の調整
     }
 
-    function updateTimer() {
-        const diff = Date.now() - startTime;
-        const d = new Date(diff);
-        const m = String(d.getUTCMinutes()).padStart(2, '0');
-        const s = String(d.getUTCSeconds()).padStart(2, '0');
-        const ms = String(Math.floor(d.getUTCMilliseconds()/100)).padStart(1, '0');
-        document.getElementById('timer').textContent = `${m}:${s}.${ms}`;
-    }
-
-    async function sendLed(cmd) {
-        if (ledCharacteristic) {
-            try {
-                await ledCharacteristic.writeValue(new Uint8Array([cmd]));
-                if(cmd === 3) log("キャリブレーションコマンド送信");
-            } catch(e) { log("送信エラー: " + e); }
-        }
+    // --- LED & 校正コマンド ---
+    async function sendCmd(cmd) {
+        if (!ledCharacteristic) return;
+        try { await ledCharacteristic.writeValue(new Uint8Array([cmd])); }
+        catch(e) { console.error(e); }
     }
     
-    document.getElementById('btnRed').onclick = () => sendLed(1);
-    document.getElementById('btnBlue').onclick = () => sendLed(2);
-    document.getElementById('btnOff').onclick = () => sendLed(0);
-    
-    // ★重要: キャリブレーションボタン (コマンド 3)
-    document.getElementById('btnCalib').onclick = () => {
-        log("静止してください...");
-        sendLed(3);
-    };
+    document.getElementById('btnRed').onclick = () => sendCmd(1);
+    document.getElementById('btnBlue').onclick = () => sendCmd(2);
+    document.getElementById('btnOff').onclick = () => sendCmd(0);
+    document.getElementById('btnCalib').onclick = () => sendCmd(3); // 校正
 
-    initChart();
 </script>
 </body>
 </html>
-
