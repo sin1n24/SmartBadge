@@ -270,7 +270,7 @@
         
         targetRot.x = pitch * (Math.PI / 180);
         targetRot.y = -yaw * (Math.PI / 180); // Three.jsのY軸は逆回転に見えることがあるため反転
-        targetRot.z = -roll * (Math.PI / 180); // 傾き方向の調整
+        targetRot.z = roll * (Math.PI / 180); // 傾き方向の調整
     }
 
     // --- LED & 校正コマンド ---
@@ -288,4 +288,5 @@
 </script>
 </body>
 </html>
+
 
