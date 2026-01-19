@@ -2,8 +2,9 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>XIAO Gyro Monitor (Debug)</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <title>XIAO Gyro Monitor (Safe Mode)</title>
+    <!-- Chart.js v4.4.0 を指定して読み込みます（バージョン固定で安定化） -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #f5f5f5; }
         .container { max-width: 900px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
@@ -16,17 +17,16 @@
         button:disabled { background: #ddd; cursor: not-allowed; }
         #timer { font-size: 1.5em; font-weight: bold; color: #333; margin: 10px 0; }
         .values { display: flex; justify-content: space-around; margin-bottom: 10px; font-family: monospace; font-size: 1.2em; }
-        /* デバッグ用コンソール表示エリア */
-        #debug-log { 
-            text-align: left; font-family: monospace; font-size: 0.8em; color: #555; 
-            background: #eee; padding: 10px; margin-top: 20px; height: 100px; overflow-y: scroll; border: 1px solid #ccc;
-        }
+        
+        /* エラー表示エリア */
+        #error-log { color: red; background: #ffe6e6; padding: 10px; margin-top: 10px; border: 1px solid red; display: none; text-align: left; font-family: monospace; }
+        #debug-log { text-align: left; font-family: monospace; font-size: 0.8em; color: #555; background: #eee; padding: 10px; margin-top: 20px; height: 100px; overflow-y: scroll; border: 1px solid #ccc; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>XIAO ジャイロ グラフ (検証モード)</h2>
+    <h2>XIAO ジャイロ グラフ (安全版)</h2>
     
     <div id="timer">00:00:00</div>
     
@@ -44,10 +44,9 @@
         <span style="color:rgb(75, 192, 192)">Z: <span id="valZ">0.00</span></span>
     </div>
 
+    <div id="error-log"></div>
     <canvas id="gyroChart"></canvas>
-    
-    <!-- 画面上でもログが見えるように追加 -->
-    <div id="debug-log">待機中...</div>
+    <div id="debug-log">準備完了</div>
 </div>
 
 <script>
@@ -58,120 +57,132 @@
     let ledCharacteristic;
     let startTime;
     let timerInterval;
+    let chart; // グローバル変数として宣言
 
-    // --- グラフ設定 ---
-    const ctx = document.getElementById('gyroChart').getContext('2d');
-    const maxPoints = 50; 
-    
-    // データ配列の初期化
-    const initialDataX = Array(maxPoints).fill(0);
-    const initialDataY = Array(maxPoints).fill(0);
-    const initialDataZ = Array(maxPoints).fill(0);
-    // ラベル配列（空文字）の初期化
-    const initialLabels = Array(maxPoints).fill('');
-
-    const chart = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: initialLabels,
-            datasets: [
-                { label: 'X', data: initialDataX, borderColor: 'rgb(255, 99, 132)', borderWidth: 2, pointRadius: 0 },
-                { label: 'Y', data: initialDataY, borderColor: 'rgb(54, 162, 235)', borderWidth: 2, pointRadius: 0 },
-                { label: 'Z', data: initialDataZ, borderColor: 'rgb(75, 192, 192)', borderWidth: 2, pointRadius: 0 }
-            ]
-        },
-        options: {
-            responsive: true,
-            animation: false, // 描画パフォーマンス優先
-            interaction: { mode: 'index', intersect: false },
-            scales: {
-                y: { 
-                    // 範囲を固定せず自動調整（動きが見えやすくなります）
-                    // min: -300, max: 300 
-                    suggestedMin: -50,
-                    suggestedMax: 50
-                }
-            }
-        }
-    });
-
-    // --- ログ出力用関数 ---
+    // --- ログ関数 ---
     function log(msg) {
         const logBox = document.getElementById('debug-log');
-        logBox.innerHTML = msg + "<br>" + logBox.innerHTML.slice(0, 1000); // 最新を上に
-        console.log(msg); // ブラウザコンソールにも出力
+        const ts = new Date().toLocaleTimeString();
+        logBox.innerHTML = `[${ts}] ${msg}<br>` + logBox.innerHTML.slice(0, 2000);
+        console.log(msg);
+    }
+
+    function logError(msg) {
+        const errBox = document.getElementById('error-log');
+        errBox.style.display = 'block';
+        errBox.textContent = "【エラー発生】 " + msg;
+        console.error(msg);
+    }
+
+    // --- グラフ初期化 ---
+    function initChart() {
+        const ctx = document.getElementById('gyroChart').getContext('2d');
+        const maxPoints = 50; 
+        
+        // 配列を個別に作成して参照切れを防ぐ
+        const dataX = new Array(maxPoints).fill(0);
+        const dataY = new Array(maxPoints).fill(0);
+        const dataZ = new Array(maxPoints).fill(0);
+        const labels = new Array(maxPoints).fill('');
+
+        chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    { label: 'X', data: dataX, borderColor: 'rgb(255, 99, 132)', borderWidth: 2, pointRadius: 0 },
+                    { label: 'Y', data: dataY, borderColor: 'rgb(54, 162, 235)', borderWidth: 2, pointRadius: 0 },
+                    { label: 'Z', data: dataZ, borderColor: 'rgb(75, 192, 192)', borderWidth: 2, pointRadius: 0 }
+                ]
+            },
+            options: {
+                responsive: true,
+                animation: false, // 高速描画設定
+                scales: {
+                    y: { suggestedMin: -200, suggestedMax: 200 }
+                }
+            }
+        });
+        log("グラフ初期化完了");
     }
 
     // --- 接続処理 ---
     document.getElementById('btnConnect').addEventListener('click', async () => {
         try {
-            log("デバイス検索中...");
+            // グラフが未作成なら作成
+            if (!chart) initChart();
+
             const device = await navigator.bluetooth.requestDevice({
                 filters: [{ namePrefix: "XIAO" }],
                 optionalServices: [SERVICE_UUID]
             });
 
-            log("接続中...");
+            log("デバイス選択: " + device.name);
             const server = await device.gatt.connect();
             const service = await server.getPrimaryService(SERVICE_UUID);
             
             ledCharacteristic = await service.getCharacteristic(CHAR_LED_UUID);
-            
             const gyroChar = await service.getCharacteristic(CHAR_GYRO_UUID);
+            
             await gyroChar.startNotifications();
             gyroChar.addEventListener('characteristicvaluechanged', handleGyroData);
 
-            // UI更新
             document.getElementById('btnConnect').disabled = true;
             document.getElementById('btnConnect').textContent = "接続済み";
             document.querySelectorAll('button:disabled').forEach(b => b.disabled = false);
 
             startTime = Date.now();
             timerInterval = setInterval(updateTimer, 100);
-            log("通信開始: 通知を待機しています");
+            log("通知受信開始...");
 
         } catch (e) {
-            console.error(e);
-            log("エラー: " + e);
-            alert("接続エラー: " + e);
+            logError(e);
         }
     });
 
-    // --- データ受信とグラフ更新 (検証ロジック入り) ---
+    // --- データ受信とグラフ更新 (Try-Catchで保護) ---
     function handleGyroData(event) {
-        const value = event.target.value;
-        const x = value.getFloat32(0, true);
-        const y = value.getFloat32(4, true);
-        const z = value.getFloat32(8, true);
+        try {
+            const value = event.target.value;
+            const x = value.getFloat32(0, true);
+            const y = value.getFloat32(4, true);
+            const z = value.getFloat32(8, true);
 
-        // 数値表示更新
-        document.getElementById('valX').textContent = x.toFixed(2);
-        document.getElementById('valY').textContent = y.toFixed(2);
-        document.getElementById('valZ').textContent = z.toFixed(2);
+            // 1. 数値表示
+            document.getElementById('valX').textContent = x.toFixed(2);
+            document.getElementById('valY').textContent = y.toFixed(2);
+            document.getElementById('valZ').textContent = z.toFixed(2);
 
-        // ★修正ポイント: ラベルとデータの同期更新
-        // 1. ラベル（X軸）の更新
-        chart.data.labels.shift(); // 先頭削除
-        chart.data.labels.push(''); // 末尾追加（これをしないとデータと数が合わなくなる）
+            // 2. グラフ更新 (安全な配列操作)
+            if (chart && chart.data && chart.data.datasets.length >= 3) {
+                // ラベル更新
+                chart.data.labels.shift();
+                chart.data.labels.push('');
 
-        // 2. データ（Y軸）の更新
-        chart.data.datasets.data.shift();
-        chart.data.datasets.data.push(x);
-        
-        chart.data.datasets[1].data.shift();
-        chart.data.datasets[1].data.push(y);
-        
-        chart.data.datasets[2].data.shift();
-        chart.data.datasets[2].data.push(z);
+                // データ更新: datasetがX, [1]がY, [2]がZ
+                chart.data.datasets.data.shift();
+                chart.data.datasets.data.push(x);
 
-        // 3. グラフ再描画 (アニメーションなしモードで即時反映)
-        chart.update('none');
+                chart.data.datasets[1].data.shift();
+                chart.data.datasets[1].data.push(y);
 
-        // ★検証ログ: 1秒に1回程度、配列の末尾の値を確認
-        if (Math.random() < 0.1) {
-            const len = chart.data.datasets.data.length;
-            const lastVal = chart.data.datasets.data[len-1];
-            log(`Graph Update: Count=${len}, LastX=${lastVal.toFixed(2)}`);
+                chart.data.datasets[2].data.shift();
+                chart.data.datasets[2].data.push(z);
+
+                // 再描画 (noneモードでちらつき防止)
+                chart.update('none');
+                
+                // 成功ログ (頻度を落として表示)
+                if (Math.random() < 0.05) {
+                    log(`Data: ${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)}`);
+                }
+            } else {
+                throw new Error("チャートオブジェクトが不正です");
+            }
+
+        } catch (e) {
+            // エラーがあってもここでキャッチして表示する
+            logError("Update Error: " + e.message);
         }
     }
 
@@ -187,14 +198,17 @@
     async function sendLed(cmd) {
         if (ledCharacteristic) {
             try {
-                log(`LED送信: ${cmd}`);
                 await ledCharacteristic.writeValue(new Uint8Array([cmd]));
-            } catch(e) { console.error(e); }
+                log("LEDコマンド送信: " + cmd);
+            } catch(e) { logError(e); }
         }
     }
     document.getElementById('btnRed').onclick = () => sendLed(1);
     document.getElementById('btnBlue').onclick = () => sendLed(2);
     document.getElementById('btnOff').onclick = () => sendLed(0);
+
+    // 起動時にグラフ初期化を実行
+    initChart();
 
 </script>
 </body>
