@@ -2,19 +2,22 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>XIAO Attitude Monitor</title>
+    <title>XIAO Attitude Controller</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f4f8; }
         .container { max-width: 900px; margin: 0 auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        .controls { margin: 20px 0; }
-        button { padding: 12px 24px; margin: 0 5px; cursor: pointer; border: none; border-radius: 6px; color: white; font-size: 1em; transition: opacity 0.2s; }
+        .controls { margin: 20px 0; display: flex; justify-content: center; gap: 10px; align-items: center; }
+        button { padding: 12px 20px; cursor: pointer; border: none; border-radius: 6px; color: white; font-size: 1em; transition: 0.2s; }
         button:hover { opacity: 0.8; }
+        button:disabled { background: #cfd8dc !important; cursor: not-allowed; }
+        
         #btnConnect { background: #2196F3; }
         #btnRed { background: #F44336; }
         #btnBlue { background: #2196F3; }
         #btnOff { background: #607D8B; }
-        button:disabled { background: #cfd8dc; cursor: not-allowed; }
+        #btnCalib { background: #FF9800; font-weight: bold; } /* オレンジ色 */
+
         #timer { font-size: 1.5em; font-weight: bold; color: #37474f; margin: 10px 0; }
         
         .val-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 15px; }
@@ -28,16 +31,17 @@
 <body>
 
 <div class="container">
-    <h2>XIAO 姿勢角モニター (Roll/Pitch/Yaw)</h2>
+    <h2>XIAO 姿勢角 & キャリブレーション</h2>
     
     <div id="timer">00:00:00</div>
     
     <div class="controls">
         <button id="btnConnect">接続開始</button>
-        <span style="margin-left: 20px;">LED: </span>
+        <div style="border-left: 1px solid #ccc; height: 30px; margin: 0 10px;"></div>
         <button id="btnRed" disabled>赤</button>
         <button id="btnBlue" disabled>青</button>
         <button id="btnOff" disabled>消灯</button>
+        <button id="btnCalib" disabled>校正 (Calibrate)</button>
     </div>
 
     <div class="val-grid">
@@ -64,11 +68,12 @@
     const CHAR_ANGLE_UUID = '12345678-1234-5678-1234-56789abcdef1';
     const CHAR_LED_UUID  = '12345678-1234-5678-1234-56789abcdef2';
 
+    let bluetoothDevice;
     let ledCharacteristic;
     let startTime;
+    let timerInterval = null; // タイマーID
     let chart;
 
-    // データ配列（グローバル管理で安定化）
     const maxPoints = 100;
     const labelsData = new Array(maxPoints).fill('');
     const rollData   = new Array(maxPoints).fill(0);
@@ -100,12 +105,9 @@
                 interaction: { intersect: false },
                 scales: {
                     y: { 
-                        min: -180, max: 180, // 角度なので±180度に設定
+                        min: -180, max: 180, // Y軸固定
                         ticks: { stepSize: 45 }
                     }
-                },
-                plugins: {
-                    legend: { position: 'top' }
                 }
             }
         });
@@ -115,13 +117,15 @@
         try {
             if (!chart) initChart();
 
-            const device = await navigator.bluetooth.requestDevice({
+            bluetoothDevice = await navigator.bluetooth.requestDevice({
                 filters: [{ namePrefix: "XIAO" }],
                 optionalServices: [SERVICE_UUID]
             });
 
-            log("接続中: " + device.name);
-            const server = await device.gatt.connect();
+            bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+            log("接続中: " + bluetoothDevice.name);
+            const server = await bluetoothDevice.gatt.connect();
             const service = await server.getPrimaryService(SERVICE_UUID);
             
             ledCharacteristic = await service.getCharacteristic(CHAR_LED_UUID);
@@ -130,44 +134,53 @@
             await angleChar.startNotifications();
             angleChar.addEventListener('characteristicvaluechanged', handleAngleData);
 
+            // UI更新
             document.getElementById('btnConnect').disabled = true;
             document.getElementById('btnConnect').textContent = "接続済み";
             document.querySelectorAll('button:disabled').forEach(b => b.disabled = false);
 
+            // タイマー開始 (リセットしてから)
+            if (timerInterval) clearInterval(timerInterval);
             startTime = Date.now();
-            setInterval(updateTimer, 100);
-            log("姿勢データ受信開始");
+            updateTimer(); // 00:00:00即時表示
+            timerInterval = setInterval(updateTimer, 100);
+            
+            log("通信開始");
 
         } catch (e) {
-            log("エラー: " + e);
-            alert("接続エラー: デバイスを再起動するか、ペアリングを解除して再試行してください");
+            log("接続エラー: " + e);
         }
     });
 
-    function handleAngleData(event) {
-        try {
-            const value = event.target.value;
-            // リトルエンディアンでFloat32を3つ読み取る
-            const roll = value.getFloat32(0, true);
-            const pitch = value.getFloat32(4, true);
-            const yaw = value.getFloat32(8, true);
-
-            // 数値表示更新
-            document.getElementById('valRoll').textContent = roll.toFixed(1);
-            document.getElementById('valPitch').textContent = pitch.toFixed(1);
-            document.getElementById('valYaw').textContent = yaw.toFixed(1);
-
-            // グラフデータ更新 (シフト＆プッシュ)
-            labelsData.shift(); labelsData.push('');
-            rollData.shift();   rollData.push(roll);
-            pitchData.shift();  pitchData.push(pitch);
-            yawData.shift();    yawData.push(yaw);
-
-            chart.update('none');
-
-        } catch (e) {
-            console.error(e);
+    function onDisconnected(event) {
+        log("切断されました");
+        document.getElementById('btnConnect').disabled = false;
+        document.getElementById('btnConnect').textContent = "再接続";
+        document.querySelectorAll('button:not(#btnConnect)').forEach(b => b.disabled = true);
+        
+        // ★重要: 切断時にタイマーを止める
+        if (timerInterval) {
+            clearInterval(timerInterval);
+            timerInterval = null;
         }
+    }
+
+    function handleAngleData(event) {
+        const value = event.target.value;
+        const roll = value.getFloat32(0, true);
+        const pitch = value.getFloat32(4, true);
+        const yaw = value.getFloat32(8, true);
+
+        document.getElementById('valRoll').textContent = roll.toFixed(1);
+        document.getElementById('valPitch').textContent = pitch.toFixed(1);
+        document.getElementById('valYaw').textContent = yaw.toFixed(1);
+
+        labelsData.shift(); labelsData.push('');
+        rollData.shift();   rollData.push(roll);
+        pitchData.shift();  pitchData.push(pitch);
+        yawData.shift();    yawData.push(yaw);
+
+        chart.update('none');
     }
 
     function updateTimer() {
@@ -183,15 +196,21 @@
         if (ledCharacteristic) {
             try {
                 await ledCharacteristic.writeValue(new Uint8Array([cmd]));
-            } catch(e) { log("LEDエラー: " + e); }
+                if(cmd === 3) log("キャリブレーションコマンド送信");
+            } catch(e) { log("送信エラー: " + e); }
         }
     }
     
     document.getElementById('btnRed').onclick = () => sendLed(1);
     document.getElementById('btnBlue').onclick = () => sendLed(2);
     document.getElementById('btnOff').onclick = () => sendLed(0);
+    
+    // ★重要: キャリブレーションボタン (コマンド 3)
+    document.getElementById('btnCalib').onclick = () => {
+        log("静止してください...");
+        sendLed(3);
+    };
 
-    // 初期化
     initChart();
 </script>
 </body>
