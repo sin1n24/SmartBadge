@@ -9,7 +9,7 @@
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #222; color: #fff; margin: 0; }
         h2 { margin-bottom: 20px; }
 
-        /* 左右2カラムのレイアウト */
+        /* 左右2カラム */
         .grid-container {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -25,7 +25,6 @@
             box-shadow: 0 4px 10px rgba(0,0,0,0.5);
         }
 
-        /* 赤・青のテーマカラー */
         .panel-red { border-top: 5px solid #F44336; }
         .panel-blue { border-top: 5px solid #2196F3; }
 
@@ -39,7 +38,9 @@
         button:disabled { background: #555 !important; color: #888; cursor: not-allowed; }
         button:hover:not(:disabled) { opacity: 0.8; }
 
-        .status-bar { margin: 10px 0; font-family: monospace; color: #ccc; }
+        .status-bar { margin: 10px 0; font-family: monospace; color: #ccc; min-height: 1.2em;}
+        /* タイマーのスタイル */
+        .timer-display { font-size: 1.5em; font-weight: bold; font-family: monospace; margin: 5px 0; color: #fff; }
         
         .val-display { 
             display: flex; justify-content: space-around; margin: 10px 0; 
@@ -53,38 +54,40 @@
 </head>
 <body>
 
-<h2>XIAO Dual IMU Controller (Red & Blue)</h2>
+<h2>XIAO Dual IMU Controller</h2>
 
 <div class="grid-container">
-    <!-- 左側：赤デバイス -->
+    <!-- 赤デバイス -->
     <div class="panel panel-red" id="panel-1">
         <h3>Device 1 (Red)</h3>
+        <div class="timer-display" id="timer1">00:00:00</div>
         <div class="controls">
             <button class="btn-connect-red" id="btnConnect1">接続 (赤)</button>
             <button class="btn-calib" id="btnCalib1" disabled>校正</button>
         </div>
         <div class="status-bar" id="status1">未接続</div>
         <div class="val-display">
-            <span style="color:#ff6b6b">R:<span id="valR1">0</span></span>
-            <span style="color:#4dabf7">P:<span id="valP1">0</span></span>
-            <span style="color:#69db7c">Y:<span id="valY1">0</span></span>
+            <span style="color:#ff6b6b">R:<span id="valR1">0.0</span></span>
+            <span style="color:#4dabf7">P:<span id="valP1">0.0</span></span>
+            <span style="color:#69db7c">Y:<span id="valY1">0.0</span></span>
         </div>
         <div class="graph-container"><canvas id="chart1"></canvas></div>
         <div class="cube-container" id="cube1"></div>
     </div>
 
-    <!-- 右側：青デバイス -->
+    <!-- 青デバイス -->
     <div class="panel panel-blue" id="panel-2">
         <h3>Device 2 (Blue)</h3>
+        <div class="timer-display" id="timer2">00:00:00</div>
         <div class="controls">
             <button class="btn-connect-blue" id="btnConnect2">接続 (青)</button>
             <button class="btn-calib" id="btnCalib2" disabled>校正</button>
         </div>
         <div class="status-bar" id="status2">未接続</div>
         <div class="val-display">
-            <span style="color:#ff6b6b">R:<span id="valR2">0</span></span>
-            <span style="color:#4dabf7">P:<span id="valP2">0</span></span>
-            <span style="color:#69db7c">Y:<span id="valY2">0</span></span>
+            <span style="color:#ff6b6b">R:<span id="valR2">0.0</span></span>
+            <span style="color:#4dabf7">P:<span id="valP2">0.0</span></span>
+            <span style="color:#69db7c">Y:<span id="valY2">0.0</span></span>
         </div>
         <div class="graph-container"><canvas id="chart2"></canvas></div>
         <div class="cube-container" id="cube2"></div>
@@ -92,29 +95,30 @@
 </div>
 
 <script>
-    // --- BLE UUID定義 ---
     const SERVICE_UUID    = '12345678-1234-5678-1234-56789abcdef0';
     const CHAR_ANGLE_UUID = '12345678-1234-5678-1234-56789abcdef1';
     const CHAR_LED_UUID   = '12345678-1234-5678-1234-56789abcdef2';
 
-    // --- デバイス管理用クラス ---
     class ImuController {
         constructor(id, ledCommand, colorHex) {
-            this.id = id;               // 1 or 2
-            this.ledCmd = ledCommand;   // 1(Red) or 2(Blue)
-            this.color = colorHex;      // グラフの色など
+            this.id = id;
+            this.ledCmd = ledCommand;
+            this.color = colorHex;
             
-            // DOM要素の取得
+            // DOM要素
             this.btnConnect = document.getElementById(`btnConnect${id}`);
             this.btnCalib   = document.getElementById(`btnCalib${id}`);
             this.statusDiv  = document.getElementById(`status${id}`);
+            this.timerDiv   = document.getElementById(`timer${id}`);
             this.valR       = document.getElementById(`valR${id}`);
             this.valP       = document.getElementById(`valP${id}`);
             this.valY       = document.getElementById(`valY${id}`);
             
-            // BLEオブジェクト
+            // 状態変数
             this.device = null;
             this.ledChar = null;
+            this.startTime = 0;
+            this.timerInterval = null;
 
             // データ配列
             this.maxPoints = 50;
@@ -123,10 +127,8 @@
             this.dataP  = new Array(this.maxPoints).fill(0);
             this.dataY  = new Array(this.maxPoints).fill(0);
 
-            // 3D回転ターゲット
             this.targetRot = { x: 0, y: 0, z: 0 };
 
-            // 初期化
             this.initChart();
             this.init3D();
             this.setupEvents();
@@ -137,74 +139,35 @@
             this.btnCalib.addEventListener('click', () => this.sendCommand(3));
         }
 
-        // --- Chart.js 初期化 ---
-        initChart() {
-            const ctx = document.getElementById(`chart${this.id}`).getContext('2d');
-            this.chart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: this.labels,
-                    datasets: [
-                        { label: 'Roll',  data: this.dataR, borderColor: '#ff6b6b', borderWidth: 1, pointRadius: 0 },
-                        { label: 'Pitch', data: this.dataP, borderColor: '#4dabf7', borderWidth: 1, pointRadius: 0 },
-                        { label: 'Yaw',   data: this.dataY, borderColor: '#69db7c', borderWidth: 1, pointRadius: 0 }
-                    ]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    animation: false,
-                    scales: { y: { min: -180, max: 180, grid: { color: '#444' } }, x: { display: false } },
-                    plugins: { legend: { display: false } }
-                }
-            });
+        // --- タイマー機能 ---
+        startTimer() {
+            if(this.timerInterval) clearInterval(this.timerInterval);
+            this.startTime = Date.now();
+            this.updateTimer();
+            this.timerInterval = setInterval(() => this.updateTimer(), 100);
         }
 
-        // --- Three.js 初期化 ---
-        init3D() {
-            const container = document.getElementById(`cube${this.id}`);
-            const w = container.clientWidth;
-            const h = container.clientHeight;
-
-            this.scene = new THREE.Scene();
-            this.camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
-            this.camera.position.set(0, 2, 5);
-            this.camera.lookAt(0, 0, 0);
-
-            this.renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-            this.renderer.setSize(w, h);
-            container.appendChild(this.renderer.domElement);
-
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
-            this.scene.add(ambientLight);
-            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            dirLight.position.set(5, 10, 7);
-            this.scene.add(dirLight);
-
-            // キューブ作成 (指定された色)
-            const geometry = new THREE.BoxGeometry(1.5, 0.3, 2.0);
-            const material = new THREE.MeshLambertMaterial({ color: this.color });
-            this.cube = new THREE.Mesh(geometry, material);
-            this.scene.add(this.cube);
-            
-            this.scene.add(new THREE.AxesHelper(3)); // 軸ガイド
-
-            // アニメーションループ開始
-            this.animate();
+        stopTimer() {
+            if(this.timerInterval) {
+                clearInterval(this.timerInterval);
+                this.timerInterval = null;
+            }
         }
 
-        animate() {
-            requestAnimationFrame(() => this.animate());
-            // 滑らかに追従
-            this.cube.rotation.x += (this.targetRot.x - this.cube.rotation.x) * 0.1;
-            this.cube.rotation.y += (this.targetRot.y - this.cube.rotation.y) * 0.1;
-            this.cube.rotation.z += (this.targetRot.z - this.cube.rotation.z) * 0.1;
-            this.renderer.render(this.scene, this.camera);
+        updateTimer() {
+            const diff = Date.now() - this.startTime;
+            const d = new Date(diff);
+            const m = String(d.getUTCMinutes()).padStart(2, '0');
+            const s = String(d.getUTCSeconds()).padStart(2, '0');
+            const ms = String(Math.floor(d.getUTCMilliseconds()/100)).padStart(1, '0');
+            this.timerDiv.textContent = `${m}:${s}.${ms}`;
         }
 
-        // --- BLE接続処理 ---
+        // --- 接続処理 ---
         async connect() {
             try {
                 this.statusDiv.textContent = "検索中...";
+                // フィルタ: 名前接頭辞とサービスUUID
                 this.device = await navigator.bluetooth.requestDevice({
                     filters: [{ namePrefix: "XIAO" }],
                     optionalServices: [SERVICE_UUID]
@@ -221,13 +184,16 @@
                 await angleChar.startNotifications();
                 angleChar.addEventListener('characteristicvaluechanged', (e) => this.handleData(e));
 
-                // 接続成功したら、自分の色コマンドを送信 (1=Red, 2=Blue)
+                // 接続完了後、自分の色コマンドを送信
                 await this.sendCommand(this.ledCmd);
 
-                this.statusDiv.textContent = "接続完了: " + this.device.name;
+                this.statusDiv.textContent = "接続: " + this.device.name;
                 this.btnConnect.disabled = true;
                 this.btnConnect.textContent = "接続中";
                 this.btnCalib.disabled = false;
+                
+                // タイマー開始
+                this.startTimer();
 
             } catch (e) {
                 console.error(e);
@@ -240,6 +206,7 @@
             this.btnConnect.disabled = false;
             this.btnConnect.textContent = "再接続";
             this.btnCalib.disabled = true;
+            this.stopTimer();
         }
 
         handleData(event) {
@@ -248,19 +215,16 @@
             const pitch = value.getFloat32(4, true);
             const yaw = value.getFloat32(8, true);
 
-            // 数値更新
             this.valR.textContent = roll.toFixed(1);
             this.valP.textContent = pitch.toFixed(1);
             this.valY.textContent = yaw.toFixed(1);
 
-            // グラフ更新
             this.labels.shift(); this.labels.push('');
             this.dataR.shift();  this.dataR.push(roll);
             this.dataP.shift();  this.dataP.push(pitch);
             this.dataY.shift();  this.dataY.push(yaw);
             this.chart.update('none');
 
-            // 3Dターゲット更新 (度->ラジアン)
             this.targetRot.x = pitch * (Math.PI / 180);
             this.targetRot.y = -yaw * (Math.PI / 180);
             this.targetRot.z = roll * (Math.PI / 180);
@@ -268,20 +232,67 @@
 
         async sendCommand(cmd) {
             if (this.ledChar) {
-                try {
-                    await this.ledChar.writeValue(new Uint8Array([cmd]));
-                } catch(e) { console.error(e); }
+                try { await this.ledChar.writeValue(new Uint8Array([cmd])); }
+                catch(e) { console.error(e); }
             }
+        }
+
+        initChart() {
+            const ctx = document.getElementById(`chart${this.id}`).getContext('2d');
+            this.chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: this.labels,
+                    datasets: [
+                        { label: 'Roll',  data: this.dataR, borderColor: '#ff6b6b', borderWidth: 1, pointRadius: 0 },
+                        { label: 'Pitch', data: this.dataP, borderColor: '#4dabf7', borderWidth: 1, pointRadius: 0 },
+                        { label: 'Yaw',   data: this.dataY, borderColor: '#69db7c', borderWidth: 1, pointRadius: 0 }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, animation: false,
+                    scales: { y: { min: -180, max: 180, grid: { color: '#444' } }, x: { display: false } },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        init3D() {
+            const container = document.getElementById(`cube${this.id}`);
+            const w = container.clientWidth;
+            const h = container.clientHeight;
+            this.scene = new THREE.Scene();
+            this.camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
+            this.camera.position.set(0, 2, 5);
+            this.camera.lookAt(0, 0, 0);
+            this.renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+            this.renderer.setSize(w, h);
+            container.appendChild(this.renderer.domElement);
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+            this.scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 10, 7);
+            this.scene.add(dirLight);
+            
+            const geometry = new THREE.BoxGeometry(1.5, 0.3, 2.0);
+            const material = new THREE.MeshLambertMaterial({ color: this.color });
+            this.cube = new THREE.Mesh(geometry, material);
+            this.scene.add(this.cube);
+            this.scene.add(new THREE.AxesHelper(3));
+            this.animate();
+        }
+
+        animate() {
+            requestAnimationFrame(() => this.animate());
+            this.cube.rotation.x += (this.targetRot.x - this.cube.rotation.x) * 0.1;
+            this.cube.rotation.y += (this.targetRot.y - this.cube.rotation.y) * 0.1;
+            this.cube.rotation.z += (this.targetRot.z - this.cube.rotation.z) * 0.1;
+            this.renderer.render(this.scene, this.camera);
         }
     }
 
-    // --- インスタンス生成 ---
-    // 左側: ID=1, LEDコマンド=1(赤), キューブ色=赤
     const dev1 = new ImuController(1, 1, 0xF44336);
-    
-    // 右側: ID=2, LEDコマンド=2(青), キューブ色=青
     const dev2 = new ImuController(2, 2, 0x2196F3);
-
 </script>
 </body>
 </html>
