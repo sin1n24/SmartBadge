@@ -2,14 +2,13 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>XIAO Dual IMU Monitor</title>
+    <title>XIAO Dual Controller</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #222; color: #fff; margin: 0; }
         h2 { margin-bottom: 20px; }
 
-        /* 左右2カラム */
         .grid-container {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -39,8 +38,8 @@
         button:hover:not(:disabled) { opacity: 0.8; }
 
         .status-bar { margin: 10px 0; font-family: monospace; color: #ccc; min-height: 1.2em;}
-        /* タイマーのスタイル */
-        .timer-display { font-size: 1.5em; font-weight: bold; font-family: monospace; margin: 5px 0; color: #fff; }
+        /* タイマー表示用 */
+        .timer-display { font-size: 1.8em; font-weight: bold; font-family: monospace; margin: 10px 0; color: #fff; }
         
         .val-display { 
             display: flex; justify-content: space-around; margin: 10px 0; 
@@ -54,7 +53,7 @@
 </head>
 <body>
 
-<h2>XIAO Dual IMU Controller</h2>
+<h2>XIAO Dual IMU Monitor</h2>
 
 <div class="grid-container">
     <!-- 赤デバイス -->
@@ -114,19 +113,20 @@
             this.valP       = document.getElementById(`valP${id}`);
             this.valY       = document.getElementById(`valY${id}`);
             
-            // 状態変数
+            // 内部変数
             this.device = null;
             this.ledChar = null;
             this.startTime = 0;
             this.timerInterval = null;
 
-            // データ配列
+            // グラフ用データ
             this.maxPoints = 50;
             this.labels = new Array(this.maxPoints).fill('');
             this.dataR  = new Array(this.maxPoints).fill(0);
             this.dataP  = new Array(this.maxPoints).fill(0);
             this.dataY  = new Array(this.maxPoints).fill(0);
 
+            // 3Dターゲット
             this.targetRot = { x: 0, y: 0, z: 0 };
 
             this.initChart();
@@ -144,6 +144,7 @@
             if(this.timerInterval) clearInterval(this.timerInterval);
             this.startTime = Date.now();
             this.updateTimer();
+            // 100msごとに更新
             this.timerInterval = setInterval(() => this.updateTimer(), 100);
         }
 
@@ -167,9 +168,10 @@
         async connect() {
             try {
                 this.statusDiv.textContent = "検索中...";
-                // フィルタ: 名前接頭辞とサービスUUID
+                
+                // "XIAO" で始まるデバイスをスキャン
                 this.device = await navigator.bluetooth.requestDevice({
-                    filters: [{ namePrefix: "XIAO" }],
+                    filters: [{ namePrefix: "XIAO" }], 
                     optionalServices: [SERVICE_UUID]
                 });
 
@@ -184,15 +186,15 @@
                 await angleChar.startNotifications();
                 angleChar.addEventListener('characteristicvaluechanged', (e) => this.handleData(e));
 
-                // 接続完了後、自分の色コマンドを送信
+                // 接続成功後にLED色変更コマンド送信
                 await this.sendCommand(this.ledCmd);
 
                 this.statusDiv.textContent = "接続: " + this.device.name;
                 this.btnConnect.disabled = true;
-                this.btnConnect.textContent = "接続中";
+                this.btnConnect.textContent = "接続済み";
                 this.btnCalib.disabled = false;
                 
-                // タイマー開始
+                // タイマー始動
                 this.startTimer();
 
             } catch (e) {
@@ -206,7 +208,7 @@
             this.btnConnect.disabled = false;
             this.btnConnect.textContent = "再接続";
             this.btnCalib.disabled = true;
-            this.stopTimer();
+            this.stopTimer(); // タイマー停止
         }
 
         handleData(event) {
@@ -268,6 +270,7 @@
             this.renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
             this.renderer.setSize(w, h);
             container.appendChild(this.renderer.domElement);
+            
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
             this.scene.add(ambientLight);
             const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -279,6 +282,7 @@
             this.cube = new THREE.Mesh(geometry, material);
             this.scene.add(this.cube);
             this.scene.add(new THREE.AxesHelper(3));
+            
             this.animate();
         }
 
